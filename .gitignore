@@ -8,6 +8,8 @@ firebase-debug.log*
 firebase-debug.*.log*
 
 .claude/
+.env
+.env.local
 
 # Firebase cache
 .firebase/
