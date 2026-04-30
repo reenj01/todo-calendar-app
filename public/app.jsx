@@ -2083,6 +2083,12 @@ function App() {
 
   const firebaseServices = window.firebaseServices || {};
   const auth = firebaseServices.auth || null;
+  const db = firebaseServices.db || null;
+
+  // Refs for Firestore sync
+  const applyingRemoteRef = useRef(false);
+  const remoteUnsubRef = useRef(null);
+  const saveTimerRef = useRef(null);
 
   // Simple undo history for app-level actions (create/move/delete/schedule/etc)
   // Stored in refs so it doesn't cause rerender on every change.
@@ -2152,6 +2158,46 @@ function App() {
       undoFutureRef.current = [];
     });
   }, [auth]);
+
+  // Subscribe to the user's Firestore document and mirror changes locally.
+  useEffect(() => {
+    if (remoteUnsubRef.current) { remoteUnsubRef.current(); remoteUnsubRef.current = null; }
+    if (!db || !authUser) return;
+    const docRef = db.collection("users").doc(authUser.uid).collection("app").doc("state");
+    let didBootstrap = false;
+    remoteUnsubRef.current = docRef.onSnapshot((snap) => {
+      if (!snap.exists) {
+        if (!didBootstrap) {
+          didBootstrap = true;
+          docRef.set({ data: JSON.stringify(state), updatedAt: Date.now() }).catch((e) => console.error("Firestore initial push failed:", e));
+        }
+        return;
+      }
+      didBootstrap = true;
+      try {
+        const remote = JSON.parse(snap.data().data || "{}");
+        if (remote && remote.folders && remote.notes) {
+          applyingRemoteRef.current = true;
+          _setState(remote);
+        }
+      } catch (e) { console.error("Firestore parse failed:", e); }
+    }, (err) => console.error("Firestore subscribe failed:", err));
+    return () => {
+      if (remoteUnsubRef.current) { remoteUnsubRef.current(); remoteUnsubRef.current = null; }
+    };
+  }, [db, authUser]);
+
+  // Debounced push of local state up to Firestore.
+  useEffect(() => {
+    if (applyingRemoteRef.current) { applyingRemoteRef.current = false; return; }
+    if (!db || !authUser) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const docRef = db.collection("users").doc(authUser.uid).collection("app").doc("state");
+      docRef.set({ data: JSON.stringify(state), updatedAt: Date.now() }).catch((e) => console.error("Firestore save failed:", e));
+    }, 600);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [state, db, authUser]);
 
   const setTab = (tab) => applyState(s => ({ ...s, tab }));
 
